@@ -1,8 +1,10 @@
-/* PAS 3:
-    Adaugarea celor 4 butoane, a posibilitatii de a 
-    modifica temperatura de atins si a functionalitatii
-    butonului de start - cat il tin apasat merge,
-    altfel se opreste.
+/* PAS 4:
+      -Implementarea MOSFET IRF520
+      -Adaugarea becului care se incalzeste si lumineaza
+      cat timp e sub temperatura ceruta si apoi se stinge.
+      -Fixarea la butoane: sa nu trebuiasca sa ti apasat
+      pentru functionare, ci apesi butonul si se trece
+      pe on, apesi din nou si se opreste.
 */
 
 #include <LiquidCrystal.h>
@@ -17,7 +19,13 @@ const int btnDown   = 7;
 const int btnSelect = 8;
 const int btnStart  = 9;
 
+const int pinMOSFET = 10; 
+
 int GettoTemp = 40; 
+
+bool sistemPornit = false;
+bool cicluFinalizat = false;
+bool ultimulStatusStart = HIGH;
 
 void setup() 
 {
@@ -28,25 +36,57 @@ void setup()
   pinMode(btnSelect, INPUT_PULLUP);
   pinMode(btnStart, INPUT_PULLUP);
 
+  pinMode(pinMOSFET, OUTPUT);
+  digitalWrite(pinMOSFET, LOW);
+
   lcd.clear();
 }
 
 void loop() 
 {
+  
   if (digitalRead(btnUp) == LOW) 
   {
     GettoTemp++;
+    cicluFinalizat = false;
     delay(150); 
   }
   if (digitalRead(btnDown) == LOW) 
   {
     GettoTemp--;
+    cicluFinalizat = false;
     delay(150);
   }
 
-  
+  int citireStart = digitalRead(btnStart);
+  if (citireStart == LOW && ultimulStatusStart == HIGH) 
+  {
+    sistemPornit = !sistemPornit;
+    cicluFinalizat = false; 
+    delay(200);
+  }
+  ultimulStatusStart = citireStart;
+
   int val = analogRead(SenzCald);
-  float tempR = (val* (5000.0 / 1024.0)) / 10.0;
+  float tempR = (val * (5000.0 / 1024.0)) / 10.0;
+
+  if (sistemPornit) 
+  {
+    if (tempR >= GettoTemp) 
+    {
+      digitalWrite(pinMOSFET, LOW);
+      sistemPornit = false;
+      cicluFinalizat = true;
+    } 
+    else 
+    {
+      digitalWrite(pinMOSFET, HIGH);
+    }
+  } 
+  else 
+  {
+    digitalWrite(pinMOSFET, LOW);
+  }
 
   lcd.setCursor(0, 0);
   lcd.print("Set: ");
@@ -54,19 +94,25 @@ void loop()
   lcd.print((char)223);
   lcd.print("C  ");
 
-  if (digitalRead(btnStart) == LOW) 
+  lcd.setCursor(11, 0);
+  if (sistemPornit) 
   {
-    lcd.print("GO  ");
-  } else 
+    lcd.print("ON  ");
+  } 
+  else if (cicluFinalizat) 
   {
-    lcd.print("STOP");
+    lcd.print("DONE");
+  } 
+  else 
+  {
+    lcd.print("STOP ");
   }
 
   lcd.setCursor(0, 1);
   lcd.print("Real: ");
   lcd.print(tempR, 1);
   lcd.print((char)223);
-  lcd.print("C   ");
+  lcd.print("C    ");
 
-  delay(50);
+  delay(60);
 }
