@@ -1,3 +1,6 @@
+/* PAS 2:
+ * Descriere: Integrare ecran LCD 16x2 și conversie directă analog-numerică
+ *            pentru senzorul LM35 (conversie tensiune -> grade Celsius).*/
 #include <LiquidCrystal.h>
 
 const int rs=12, en=11, d4=5, d5=4, d6=3, d7=2;
