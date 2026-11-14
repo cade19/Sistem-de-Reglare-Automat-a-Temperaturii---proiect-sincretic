@@ -1,8 +1,12 @@
-/*Pas 5:
-    Implementari stari (BEFORE,HEAT,KEEP,COOL,FINI) pentru controlul becului
-    prin MOFSET IRF520, temporizare cu millis(), si reglaj cu oprireClipocit
-    pentru stabilizarea temperaturii
+/*Pas 6:
+    Inlocuirea comportamentului de alternare de pe ON pe OFF la reglaj,
+    in apropierea pragului, printr-un semnal PWM(0-255).
+    Intensitatea becului scade treptat la intrarea in range-ul de 
+    [prag dorit-4,prag dorit] pentru eliminarea depasirii dupa atingerea
+    pragului, iar temperatura este mediata pe 5 esantioane(5 citiri consecutive
+    la interval de 2ms si facerea mediei aritmetice) pentru stabilitate
 */
+
 #include <LiquidCrystal.h>
 
 const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
@@ -18,8 +22,11 @@ const int btnStart  = 9;
 const int pinMOSFET = 10; 
 
 int GettoTemp = 40;
-int KeepSec = 60;     
-const float oprireClipocit = 0.8; //prevenirea clipociri becului la atingerea pragului
+int KeepSec = 60;
+const float bandaProp = 4.0;
+const int pwmMinimKeep = 35;
+
+int comandaPWM = 0;
 
 enum StareSistem {
   STARE_BEFORE,
@@ -45,29 +52,34 @@ void setup()
   pinMode(btnStart, INPUT_PULLUP);
 
   pinMode(pinMOSFET, OUTPUT);
-  digitalWrite(pinMOSFET, LOW);
+  analogWrite(pinMOSFET, 0);
 
   lcd.clear();
 }
 
 void loop() 
 {
-  int val = analogRead(SenzCald);
-  float tempR = (val * (5000.0 / 1024.0)) / 10.0;
+  long sumaRaw = 0;
+  for (int i = 0; i < 5; i++) {
+    sumaRaw += analogRead(SenzCald);
+    delay(2);
+  }
+  float valMedie = sumaRaw / 5.0;
+  float tempR = (valMedie * (5000.0 / 1024.0)) / 10.0;
 
   int citireStart = digitalRead(btnStart);
   if (citireStart == LOW && ultimulStatusStart == HIGH) 
   {
     if (stareCurenta == STARE_BEFORE || stareCurenta == STARE_FINI) 
     {
-      stareCurenta = STARE_HEAT; 
+      stareCurenta = STARE_HEAT;
     } 
     else 
     {
-      stareCurenta = STARE_BEFORE; 
-      digitalWrite(pinMOSFET, LOW);
+      stareCurenta = STARE_BEFORE;
+      analogWrite(pinMOSFET, 0);
     }
-    delay(200); 
+    delay(200);
   }
   ultimulStatusStart = citireStart;
 
@@ -85,18 +97,29 @@ void loop()
     }
   }
 
+  float eroare = GettoTemp - tempR;
+
   switch (stareCurenta) 
   {
     case STARE_BEFORE:
-      digitalWrite(pinMOSFET, LOW);
+      comandaPWM = 0;
       break;
 
     case STARE_HEAT:
-      digitalWrite(pinMOSFET, HIGH);
       if (tempR >= GettoTemp) 
       {
         stareCurenta = STARE_KEEP;
-        StarttoKeep = millis(); 
+        StarttoKeep = millis();
+        comandaPWM = pwmMinimKeep;
+      } 
+      else if (eroare > bandaProp) 
+      {
+        comandaPWM = 255;
+      } 
+      else 
+      {
+        comandaPWM = map((long)(eroare * 10), 0, (long)(bandaProp * 10), pwmMinimKeep, 255);
+        comandaPWM = constrain(comandaPWM, 0, 255);
       }
       break;
 
@@ -106,25 +129,24 @@ void loop()
         if (secundeScurse >= KeepSec) 
         {
           stareCurenta = STARE_COOL;
-          digitalWrite(pinMOSFET, LOW);
+          comandaPWM = 0;
         } 
         else 
         {
           RemainingtoKeep = KeepSec - secundeScurse;
-          if (tempR < (GettoTemp - oprireClipocit)) 
-          {
-            digitalWrite(pinMOSFET, HIGH);
-          } 
-          else if (tempR >= GettoTemp) 
-          {
-            digitalWrite(pinMOSFET, LOW);
+          
+          if (eroare > 0) {
+            comandaPWM = map((long)(eroare * 10), 0, (long)(bandaProp * 10), pwmMinimKeep, 220);
+          } else {
+            comandaPWM = 0;
           }
+          comandaPWM = constrain(comandaPWM, 0, 255);
         }
       }
       break;
 
     case STARE_COOL:
-      digitalWrite(pinMOSFET, LOW);
+      comandaPWM = 0;
       if (tempR <= 30.0) 
       {
         stareCurenta = STARE_FINI;
@@ -132,9 +154,13 @@ void loop()
       break;
 
     case STARE_FINI:
-      digitalWrite(pinMOSFET, LOW);
+      comandaPWM = 0;
       break;
   }
+
+  analogWrite(pinMOSFET, comandaPWM);
+
+  int procentPutere = map(comandaPWM, 0, 255, 0, 100);
 
   lcd.setCursor(0, 0);
   lcd.print("S:");
@@ -146,9 +172,14 @@ void loop()
   switch (stareCurenta) 
   {
     case STARE_BEFORE: lcd.print("[BE4 ]  "); break;
-    case STARE_HEAT: lcd.print("[HEAT]  "); break;
+    case STARE_HEAT: 
+      lcd.print("[H ");
+      if (procentPutere < 100) lcd.print(" ");
+      lcd.print(procentPutere);
+      lcd.print("%]");
+      break;
     case STARE_KEEP: 
-      lcd.print("[KEEP");
+      lcd.print("[K ");
       if (RemainingtoKeep < 10) lcd.print(" ");
       lcd.print(RemainingtoKeep);
       lcd.print("s]");
@@ -158,10 +189,17 @@ void loop()
   }
 
   lcd.setCursor(0, 1);
-  lcd.print("Real: ");
+  lcd.print("R:");
   lcd.print(tempR, 1);
   lcd.print((char)223);
-  lcd.print("C    ");
+  lcd.print("C ");
+
+  lcd.setCursor(10, 1);
+  lcd.print("P:");
+  if (procentPutere < 10) lcd.print("  ");
+  else if (procentPutere < 100) lcd.print(" ");
+  lcd.print(procentPutere);
+  lcd.print("%");
 
   delay(60);
 }
