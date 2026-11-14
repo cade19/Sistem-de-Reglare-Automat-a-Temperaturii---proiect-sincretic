@@ -1,12 +1,8 @@
-/* PAS 4:
-      -Implementarea MOSFET IRF520
-      -Adaugarea becului care se incalzeste si lumineaza
-      cat timp e sub temperatura ceruta si apoi se stinge.
-      -Fixarea la butoane: sa nu trebuiasca sa ti apasat
-      pentru functionare, ci apesi butonul si se trece
-      pe on, apesi din nou si se opreste.
+/*Pas 5:
+    Implementari stari (BEFORE,HEAT,KEEP,COOL,FINI) pentru controlul becului
+    prin MOFSET IRF520, temporizare cu millis(), si reglaj cu oprireClipocit
+    pentru stabilizarea temperaturii
 */
-
 #include <LiquidCrystal.h>
 
 const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
@@ -21,10 +17,22 @@ const int btnStart  = 9;
 
 const int pinMOSFET = 10; 
 
-int GettoTemp = 40; 
+int GettoTemp = 40;
+int KeepSec = 60;     
+const float oprireClipocit = 0.8; //prevenirea clipociri becului la atingerea pragului
 
-bool sistemPornit = false;
-bool cicluFinalizat = false;
+enum StareSistem {
+  STARE_BEFORE,
+  STARE_HEAT,
+  STARE_KEEP,
+  STARE_COOL,
+  STARE_FINI
+};
+
+StareSistem stareCurenta = STARE_BEFORE;
+
+unsigned long StarttoKeep = 0;
+unsigned long RemainingtoKeep = 0;
 bool ultimulStatusStart = HIGH;
 
 void setup() 
@@ -44,68 +52,109 @@ void setup()
 
 void loop() 
 {
-  
-  if (digitalRead(btnUp) == LOW) 
-  {
-    GettoTemp++;
-    cicluFinalizat = false;
-    delay(150); 
-  }
-  if (digitalRead(btnDown) == LOW) 
-  {
-    GettoTemp--;
-    cicluFinalizat = false;
-    delay(150);
-  }
+  int val = analogRead(SenzCald);
+  float tempR = (val * (5000.0 / 1024.0)) / 10.0;
 
   int citireStart = digitalRead(btnStart);
   if (citireStart == LOW && ultimulStatusStart == HIGH) 
   {
-    sistemPornit = !sistemPornit;
-    cicluFinalizat = false; 
-    delay(200);
-  }
-  ultimulStatusStart = citireStart;
-
-  int val = analogRead(SenzCald);
-  float tempR = (val * (5000.0 / 1024.0)) / 10.0;
-
-  if (sistemPornit) 
-  {
-    if (tempR >= GettoTemp) 
+    if (stareCurenta == STARE_BEFORE || stareCurenta == STARE_FINI) 
     {
-      digitalWrite(pinMOSFET, LOW);
-      sistemPornit = false;
-      cicluFinalizat = true;
+      stareCurenta = STARE_HEAT; 
     } 
     else 
     {
-      digitalWrite(pinMOSFET, HIGH);
+      stareCurenta = STARE_BEFORE; 
+      digitalWrite(pinMOSFET, LOW);
     }
-  } 
-  else 
+    delay(200); 
+  }
+  ultimulStatusStart = citireStart;
+
+  if (stareCurenta == STARE_BEFORE) 
   {
-    digitalWrite(pinMOSFET, LOW);
+    if (digitalRead(btnUp) == LOW) 
+    {
+      GettoTemp++;
+      delay(150);
+    }
+    if (digitalRead(btnDown) == LOW) 
+    {
+      GettoTemp--;
+      delay(150);
+    }
+  }
+
+  switch (stareCurenta) 
+  {
+    case STARE_BEFORE:
+      digitalWrite(pinMOSFET, LOW);
+      break;
+
+    case STARE_HEAT:
+      digitalWrite(pinMOSFET, HIGH);
+      if (tempR >= GettoTemp) 
+      {
+        stareCurenta = STARE_KEEP;
+        StarttoKeep = millis(); 
+      }
+      break;
+
+    case STARE_KEEP:
+      {
+        unsigned long secundeScurse = (millis() - StarttoKeep) / 1000;
+        if (secundeScurse >= KeepSec) 
+        {
+          stareCurenta = STARE_COOL;
+          digitalWrite(pinMOSFET, LOW);
+        } 
+        else 
+        {
+          RemainingtoKeep = KeepSec - secundeScurse;
+          if (tempR < (GettoTemp - oprireClipocit)) 
+          {
+            digitalWrite(pinMOSFET, HIGH);
+          } 
+          else if (tempR >= GettoTemp) 
+          {
+            digitalWrite(pinMOSFET, LOW);
+          }
+        }
+      }
+      break;
+
+    case STARE_COOL:
+      digitalWrite(pinMOSFET, LOW);
+      if (tempR <= 30.0) 
+      {
+        stareCurenta = STARE_FINI;
+      }
+      break;
+
+    case STARE_FINI:
+      digitalWrite(pinMOSFET, LOW);
+      break;
   }
 
   lcd.setCursor(0, 0);
-  lcd.print("Set: ");
+  lcd.print("S:");
   lcd.print(GettoTemp);
   lcd.print((char)223);
-  lcd.print("C  ");
+  lcd.print("C ");
 
-  lcd.setCursor(11, 0);
-  if (sistemPornit) 
+  lcd.setCursor(8, 0);
+  switch (stareCurenta) 
   {
-    lcd.print("ON  ");
-  } 
-  else if (cicluFinalizat) 
-  {
-    lcd.print("DONE");
-  } 
-  else 
-  {
-    lcd.print("STOP ");
+    case STARE_BEFORE: lcd.print("[BE4 ]  "); break;
+    case STARE_HEAT: lcd.print("[HEAT]  "); break;
+    case STARE_KEEP: 
+      lcd.print("[KEEP");
+      if (RemainingtoKeep < 10) lcd.print(" ");
+      lcd.print(RemainingtoKeep);
+      lcd.print("s]");
+      break;
+    case STARE_COOL: lcd.print("[COOL]  "); break;
+    case STARE_FINI: lcd.print("[FINI]  "); break;
   }
 
   lcd.setCursor(0, 1);
